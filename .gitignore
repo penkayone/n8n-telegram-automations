@@ -1,0 +1,23 @@
+# Секреты и окружение (в публичный репозиторий не попадают)
+.env
+*.env
+.env.*
+credentials*
+*.pem
+*.key
+service-account*.json
+google-credentials*.json
+
+# Сырые экспорты воркфлоу n8n (содержат приватные идентификаторы и доступы)
+*.json
+
+# Локальные базы и состояние
+*.sqlite
+*.sqlite3
+*.db
+
+# Системное и IDE
+.idea/
+.vscode/
+.DS_Store
+node_modules/
