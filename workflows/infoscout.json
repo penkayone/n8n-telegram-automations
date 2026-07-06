@@ -1,0 +1,551 @@
+{
+  "name": "InfoScout, мониторинг инфополя",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 */4 * * *"
+            }
+          ]
+        }
+      },
+      "id": "trig4",
+      "name": "Каждые 4 часа",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "cachedResultName": "InfoScout"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Channels",
+          "cachedResultName": "Channels"
+        },
+        "options": {}
+      },
+      "id": "rdch",
+      "name": "Channels: читать",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        224,
+        304
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "YOUR_GOOGLE_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map(i=>i.json).filter(r=> r && (r.active===true || String(r.active).trim().toUpperCase()==='TRUE')).map(r=>({ json:{ channel:String(r.channel).trim(), category:String(r.category||'').trim(), last_id:Number(r.last_id)||0 } }));"
+      },
+      "id": "actch",
+      "name": "Активные каналы",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://t.me/s/{{ $json.channel }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (compatible; n8n-infoscout)"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 20000
+        }
+      },
+      "id": "fetch",
+      "name": "Забрать t.me/s",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        672,
+        304
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "function decode(s){ return String(s).replace(/<br\\s*\\/?>/gi,'\\n').replace(/<[^>]+>/g,'').replace(/&#x([0-9a-fA-F]+);/g,(m,h)=>String.fromCodePoint(parseInt(h,16))).replace(/&#(\\d+);/g,(m,d)=>String.fromCodePoint(parseInt(d,10))).replace(/&nbsp;/g,' ').replace(/&quot;/g,'\"').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&').replace(/[ \\t]+\\n/g,'\\n').replace(/\\n{3,}/g,'\\n\\n').trim(); }\nfunction parseAll(html){ const posts=[]; const blocks=String(html).split('tgme_widget_message_wrap'); for(const b of blocks){ const dm=b.match(/data-post=\"([^\"]+)\"/); if(!dm) continue; const parts=dm[1].split('/'); const ch=parts[0]; const id=parseInt(parts[1]||'',10); if(!ch||!id) continue; const tm=b.match(/datetime=\"([^\"]+)\"/); const date=tm?tm[1]:''; const txm=b.match(/tgme_widget_message_text[^>]*>([\\s\\S]*?)<\\/div>/); const rawtext=txm?txm[1]:''; const text=decode(rawtext); const hrefs=[]; let hm; const re=/href=\"([^\"]+)\"/g; while((hm=re.exec(rawtext))){ const u=hm[1]; if(/^https?:/i.test(u)) hrefs.push(u); } const urlsInText=(text.match(/https?:\\/\\/[^\\s)\\]]+/g)||[]); const links=Array.from(new Set(hrefs.concat(urlsInText))); const hasAttach=/tgme_widget_message_(photo|video|document|voice|roundvideo)/.test(b); posts.push({ id, channel:ch, date, text, links, hasAttach, link:'https://t.me/'+ch+'/'+id }); } return posts; }\nfunction isFileDoc(u){ return /\\.(pdf|xlsx?|docx?|pptx?|csv)(\\?|#|$)/i.test(u) || /(docs|drive|sheets)\\.google\\.com/i.test(u); }\nconst chMap={}; for(const c of $('Активные каналы').all()){ chMap[c.json.channel]={ last_id:Number(c.json.last_id)||0, category:c.json.category||'' }; }\nconst out=[]; for(const it of $input.all()){ const html=it.json&&it.json.data; if(typeof html!=='string') continue; for(const p of parseAll(html)){ const meta=chMap[p.channel]||{last_id:0,category:''}; if(p.id>meta.last_id){ const fdocs=(p.links||[]).filter(isFileDoc); let fl=fdocs.join(' | '); if(p.hasAttach) fl=(fl?fl+' | ':'')+'[вложение в Telegram]'; out.push({ json:{ channel:p.channel, category:meta.category, post_id:p.id, date:p.date, post_link:p.link, file_links:fl, text:p.text, links:p.links, hasAttach:p.hasAttach } }); } } } return out;"
+      },
+      "id": "parse",
+      "name": "Парсить посты",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const byCh={}; for(const it of $('Парсить посты').all()){ const p=it.json; if(!p||!p.channel) continue; if(byCh[p.channel]==null || p.post_id>byCh[p.channel]) byCh[p.channel]=p.post_id; } return Object.keys(byCh).map(ch=>({ json:{ channel:ch, last_id:byCh[ch] } }));"
+      },
+      "id": "lastid",
+      "name": "Считать last_id",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1104,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "cachedResultName": "InfoScout"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Channels",
+          "cachedResultName": "Channels"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "matchingColumns": [
+            "channel"
+          ],
+          "value": {},
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "updch",
+      "name": "Channels: обновить",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1328,
+        160
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "YOUR_GOOGLE_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "function isFileDoc(u){ return /\\.(pdf|xlsx?|docx?|pptx?|csv)(\\?|#|$)/i.test(u) || /(docs|drive|sheets)\\.google\\.com/i.test(u); }\nfunction passFilter(p){ if(p.hasAttach) return true; if(p.links && p.links.length) return true; const reL=/\\b(seo|ai|llm|gpt|claude|guide|tool|case|release|schema|ahrefs|gsc|api)\\b/i; const reC=/(серп|выдач|ссылк|индекс|краул|нейросет|нейронк|диффуз|кейс|гайд|инструкци|инструмент|сервис|релиз|обновлени|выпуст|рекоменду|советую|подборк|core web vitals|midjourney)/i; return reL.test(p.text||'') || reC.test(p.text||''); }\nreturn $input.all().filter(it=> passFilter({ text:it.json.text, links:it.json.links, hasAttach:it.json.hasAttach }));"
+      },
+      "id": "filt",
+      "name": "Грубый фильтр",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1104,
+        448
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const SYSTEM = 'Ты строгий фильтр постов из Telegram для рабочей базы Антона по SEO, iGaming и AI-автоматизации. По умолчанию useful=false. Ставь useful=true ТОЛЬКО если пост реально применим в работе, то есть это одно из: конкретный инструмент или сервис который можно взять и использовать (с названием); рабочая методика или прием который можно повторить; разбор кейса с цифрами и понятным выводом что сработало; конкретное изменение в SEO (алгоритмы, выдача, индексация) или в правилах площадок и партнерок, влияющее на работу. Жестко отсекай useful=false: новости про релизы и драму ИИ-моделей, посты в духе лучше или хуже, обзоры и сравнения видео и картиночных моделей, общую индустриальную болтовню, аналитику без прикладного действия, анонсы, рекламу, продажу курсов, вакансии, розыгрыши, мемы. Тип рынок ставь только под конкретные цифры или изменения правил. Верни строго JSON-массив, без markdown и пояснений. Для каждого поста объект: {\"i\": индекс из входа, \"useful\": true или false, \"type\": если useful один из инструмент, методика, кейс, рынок, материал, \"summary\": если useful СТРОГО одна короткая строка на русском, максимум 18 слов, одно предложение, без точки с запятой и без длинных перечислений, сначала название инструмента или что изменилось, потом одним куском что делать}. Для бесполезных хватит {\"i\":N,\"useful\":false}. Пиши по-русски, без буквы е с точками и без длинного тире.';\nconst GROUP=10;\nconst rows=$input.all().map(i=>i.json);\nconst out=[];\nfor(let s=0;s<rows.length;s+=GROUP){ const chunk=rows.slice(s,s+GROUP); const posts=chunk.map((r,idx)=>({ i:idx, channel:r.channel, category:r.category, text:(r.text&&String(r.text).trim())?String(r.text).slice(0,1500):'(пустой пост, только медиа)' })); out.push({ json:{ rows:chunk, body:{ model:'claude-sonnet-4-6', max_tokens:3000, system:SYSTEM, messages:[{ role:'user', content:'Посты:\\n'+JSON.stringify(posts) }] } } }); }\nreturn out;"
+      },
+      "id": "bld",
+      "name": "Собрать батч Claude",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1328,
+        448
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {}
+      },
+      "id": "claude",
+      "name": "Claude: классификация",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1552,
+        448
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "alwaysOutputData": true,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "YOUR_ANTHROPIC_CREDENTIAL_ID",
+          "name": "Anthropic API"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "function clean(s){ return String(s==null?'':s).replace(/ё/g,'е').replace(/Ё/g,'Е').replace(/\\s*[—–]\\s*/g,', '); }\nconst ctx=$('Собрать батч Claude').all();\nconst items=$input.all();\nconst out=[];\nfor(let k=0;k<items.length;k++){ const rows=(ctx[k]&&ctx[k].json.rows)?ctx[k].json.rows:[]; const r=items[k].json; let txt=''; try{ txt=r&&r.content&&r.content[0]&&r.content[0].text?r.content[0].text:''; }catch(e){} if(!txt) continue; let arr=null; try{ const cl=String(txt).replace(/```json/gi,'').replace(/```/g,'').trim(); const a=cl.indexOf('['); const b=cl.lastIndexOf(']'); arr=JSON.parse(a>=0&&b>=0?cl.slice(a,b+1):cl); }catch(e){ continue; } if(!Array.isArray(arr)) continue; for(const v of arr){ if(!v||v.useful!==true) continue; const row=rows[v.i]; if(!row) continue; out.push({ json:{ date:row.date||'', category:row.category||'', type:clean(String(v.type||'')), channel:row.channel||'', summary:clean(String(v.summary||'')), post_link:row.post_link||'', file_links:row.file_links||'' } }); } }\nreturn out;"
+      },
+      "id": "prs",
+      "name": "Разобрать ответ",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        448
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "cachedResultName": "InfoScout"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Items",
+          "cachedResultName": "Items"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "items",
+      "name": "Items: записать",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1984,
+        448
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "YOUR_GOOGLE_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * *"
+            }
+          ]
+        }
+      },
+      "id": "trigD",
+      "name": "Дайджест 8:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        720
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "cachedResultName": "InfoScout"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Items",
+          "cachedResultName": "Items"
+        },
+        "options": {}
+      },
+      "id": "rditems",
+      "name": "Items: читать",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        224,
+        720
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "YOUR_GOOGLE_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\nfunction clean(s){ return String(s==null?'':s).replace(/ё/g,'е').replace(/Ё/g,'Е').replace(/\\s*[—–]\\s*/g,', '); }\nfunction shorten(s){ s=clean(s).replace(/\\s+/g,' ').trim(); const dot=s.search(/[.!?]\\s/); if(dot>40) s=s.slice(0,dot+1); if(s.length>140){ let t=s.slice(0,140); const sp=t.lastIndexOf(' '); if(sp>0) t=t.slice(0,sp); s=t.replace(/[\\s.,;:]+$/,'')+'…'; } return s; }\nfunction pointBody(r){ let s=shorten(r.summary); let head=s, tail=''; const ci=s.search(/[,:]/); if(ci>0){ head=s.slice(0,ci).trim(); tail=s.slice(ci+1).trim(); } else { const parts=s.split(' '); if(parts.length>5){ head=parts.slice(0,4).join(' '); tail=parts.slice(4).join(' '); } } let ln='<b>'+esc(head)+'</b>'; if(tail) ln+=' '+esc(tail); if(r.post_link) ln+=' '+esc(r.post_link); return ln; }\nconst SINCE = Date.now() - 24*60*60*1000;\nlet rows=$input.all().map(i=>i.json).filter(r=>{ if(!r||!r.summary) return false; const d=Date.parse(r.date); return isFinite(d)&&d>=SINCE; });\nrows.forEach(r=>{ r._t=Date.parse(r.date)||0; });\nconst cats=[['iGaming','🎰'],['AI','🤖'],['SEO','🔍']];\nconst typeOrder=['инструмент','методика','кейс','рынок','материал'];\nconst MAXPERCAT=8; const MSGLIMIT=4000;\nconst out=[];\nfor(const ce of cats){ const cat=ce[0], emoji=ce[1]; let list=rows.filter(r=> (['iGaming','AI','SEO'].indexOf(r.category)>=0?r.category:'AI')===cat); if(!list.length) continue; list.sort((a,b)=> b._t-a._t); const total=list.length; const top=list.slice(0,MAXPERCAT); const extra=total-top.length; const byType={}; for(const r of top){ const t=(r.type&&String(r.type).trim())?clean(String(r.type).trim()):'прочее'; (byType[t]=byType[t]||[]).push(r); } const seen=[]; for(const t of typeOrder){ if(byType[t]) seen.push(t); } for(const t of Object.keys(byType)){ if(typeOrder.indexOf(t)<0) seen.push(t); } const segs=[]; let n=0; for(const t of seen){ segs.push(''); segs.push('<b>'+esc(t)+'</b>'); for(const r of byType[t]){ n++; segs.push(n+'. '+pointBody(r)); } } if(extra>0){ segs.push(''); segs.push('<i>и еще '+extra+'</i>'); } const headerLine=emoji+' <b>'+esc(cat)+'</b>'; let buf=headerLine; for(const seg of segs){ if((buf+'\\n'+seg).length>MSGLIMIT){ out.push({ json:{ text:buf } }); buf=headerLine; } buf+='\\n'+seg; } out.push({ json:{ text:buf } }); }\nif(!out.length) out.push({ json:{ text:'🤖 <b>InfoScout</b>\\nЗа последние сутки полезного не найдено.' } });\nreturn out;"
+      },
+      "id": "dig",
+      "name": "Дайджест за сутки",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        720
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "tg",
+      "name": "Дайджест: отправить",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        672,
+        720
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "webhookId": "YOUR_WEBHOOK_ID",
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "Telegram Digest Bot"
+        }
+      },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Каждые 4 часа": {
+      "main": [
+        [
+          {
+            "node": "Channels: читать",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Channels: читать": {
+      "main": [
+        [
+          {
+            "node": "Активные каналы",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Активные каналы": {
+      "main": [
+        [
+          {
+            "node": "Забрать t.me/s",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Забрать t.me/s": {
+      "main": [
+        [
+          {
+            "node": "Парсить посты",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Парсить посты": {
+      "main": [
+        [
+          {
+            "node": "Считать last_id",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Грубый фильтр",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Считать last_id": {
+      "main": [
+        [
+          {
+            "node": "Channels: обновить",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Грубый фильтр": {
+      "main": [
+        [
+          {
+            "node": "Собрать батч Claude",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Собрать батч Claude": {
+      "main": [
+        [
+          {
+            "node": "Claude: классификация",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude: классификация": {
+      "main": [
+        [
+          {
+            "node": "Разобрать ответ",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Разобрать ответ": {
+      "main": [
+        [
+          {
+            "node": "Items: записать",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Дайджест 8:00": {
+      "main": [
+        [
+          {
+            "node": "Items: читать",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Items: читать": {
+      "main": [
+        [
+          {
+            "node": "Дайджест за сутки",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Дайджест за сутки": {
+      "main": [
+        [
+          {
+            "node": "Дайджест: отправить",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Tallinn",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "versionId": "YOUR_VERSION_ID",
+  "meta": {
+    "instanceId": "YOUR_INSTANCE_ID"
+  },
+  "id": "YOUR_WORKFLOW_ID",
+  "tags": []
+}

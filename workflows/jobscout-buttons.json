@@ -1,0 +1,235 @@
+{
+  "name": "JobScout - кнопки",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "seconds",
+              "secondsInterval": 10
+            }
+          ]
+        }
+      },
+      "id": "sched",
+      "name": "Каждые 10 сек",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const TOKEN = 'YOUR_TELEGRAM_BOT_TOKEN';\nconst sd = $getWorkflowStaticData('global');\nconst offset = sd.tg_offset || 0;\nconst url = 'https://api.telegram.org/bot' + TOKEN + '/getUpdates?timeout=0&allowed_updates=' + encodeURIComponent('[\"callback_query\"]') + (offset ? ('&offset=' + offset) : '');\nreturn [{ json: { url } }];"
+      },
+      "id": "buildurl",
+      "name": "Запрос getUpdates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "options": {
+          "timeout": 8000
+        }
+      },
+      "id": "http",
+      "name": "getUpdates",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        448,
+        304
+      ],
+      "retryOnFail": false,
+      "maxTries": 2,
+      "waitBetweenTries": 2000,
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const sd = $getWorkflowStaticData('global');\nconst resp = $input.first() ? $input.first().json : {};\nconst updates = (resp && resp.ok && Array.isArray(resp.result)) ? resp.result : [];\nconst map = {\n  apply: { status:'apply', toast:'Помечено: податься', label:'✅ Помечено: податься' },\n  spam:  { status:'spam',  toast:'В спам',            label:'🚫 В спам' },\n  later: { status:'later', toast:'Отложено',          label:'🕒 Отложено' }\n};\nconst seen = Array.isArray(sd.processed) ? sd.processed : [];\nconst seenSet = new Set(seen);\nlet maxId = sd.tg_offset ? sd.tg_offset - 1 : 0;\nconst out = [];\nfor(const u of updates){\n  if(typeof u.update_id === 'number' && u.update_id > maxId) maxId = u.update_id;\n  const cq = u.callback_query;\n  if(!cq || !cq.data) continue;\n  if(cq.id && seenSet.has(cq.id)) continue;\n  if(cq.id){ seenSet.add(cq.id); seen.push(cq.id); }\n  const data = String(cq.data);\n  const idx = data.indexOf(':');\n  const action = idx>=0 ? data.slice(0,idx) : data;\n  const row_id = idx>=0 ? data.slice(idx+1) : '';\n  const m = map[action] || { status: action, toast:'Готово', label:'Статус: '+action };\n  const origText = (cq.message && cq.message.text) ? cq.message.text : '';\n  out.push({ json: {\n    action, row_id, status: m.status, toast: m.toast,\n    callbackId: cq.id,\n    chatId: (cq.message && cq.message.chat) ? cq.message.chat.id : '',\n    messageId: cq.message ? cq.message.message_id : '',\n    editText: (origText ? origText + '\\n\\n' : '') + m.label\n  }});\n}\nif(updates.length){ sd.tg_offset = maxId + 1; }\nsd.processed = seen.slice(-300);\nreturn out;"
+      },
+      "id": "proc",
+      "name": "Обработать апдейты",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "cachedResultName": "Jobs Monitor"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Jobs",
+          "cachedResultName": "Jobs"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "matchingColumns": [
+            "row_id"
+          ],
+          "value": {},
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "status",
+      "name": "Jobs: статус",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        880,
+        304
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "YOUR_GOOGLE_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "editMessageText",
+        "chatId": "={{ $('Обработать апдейты').item.json.chatId }}",
+        "messageId": "={{ $('Обработать апдейты').item.json.messageId }}",
+        "text": "={{ $('Обработать апдейты').item.json.editText }}",
+        "additionalFields": {}
+      },
+      "id": "edit",
+      "name": "Обновить сообщение",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1328,
+        304
+      ],
+      "webhookId": "YOUR_WEBHOOK_ID",
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "Telegram Bot"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map((it,i)=>({ json: { row_id: it.json.row_id, status: it.json.status }, pairedItem: { item: i } }));"
+      },
+      "id": "reduce",
+      "name": "Свести к статусу",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        784,
+        464
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Каждые 10 сек": {
+      "main": [
+        [
+          {
+            "node": "Запрос getUpdates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Запрос getUpdates": {
+      "main": [
+        [
+          {
+            "node": "getUpdates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "getUpdates": {
+      "main": [
+        [
+          {
+            "node": "Обработать апдейты",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Свести к статусу": {
+      "main": [
+        [
+          {
+            "node": "Jobs: статус",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Jobs: статус": {
+      "main": [
+        [
+          {
+            "node": "Обновить сообщение",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Обработать апдейты": {
+      "main": [
+        [
+          {
+            "node": "Свести к статусу",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "none",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "versionId": "YOUR_VERSION_ID",
+  "meta": {
+    "instanceId": "YOUR_INSTANCE_ID"
+  },
+  "id": "YOUR_WORKFLOW_ID",
+  "tags": []
+}

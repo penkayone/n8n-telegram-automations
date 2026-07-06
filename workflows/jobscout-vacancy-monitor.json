@@ -1,0 +1,486 @@
+{
+  "name": "JobScout - мониторинг вакансий",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 */4 * * *"
+            }
+          ]
+        }
+      },
+      "id": "trigger",
+      "name": "Каждые 4 часа",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "cachedResultName": "Jobs Monitor"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Channels",
+          "cachedResultName": "Channels"
+        },
+        "options": {}
+      },
+      "id": "readch",
+      "name": "Channels: читать",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        224,
+        304
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "YOUR_GOOGLE_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all()\n  .map(i => i.json)\n  .filter(r => r && (r.active === true || String(r.active).trim().toUpperCase() === 'TRUE'))\n  .map(r => ({ json: { channel: String(r.channel).trim(), last_id: Number(r.last_id) || 0 } }));"
+      },
+      "id": "active",
+      "name": "Активные каналы",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "function decode(s){\n  return String(s)\n    .replace(/<br\\s*\\/?>/gi,'\\n')\n    .replace(/<[^>]+>/g,'')\n    .replace(/&#x([0-9a-fA-F]+);/g,(m,h)=>String.fromCodePoint(parseInt(h,16)))\n    .replace(/&#(\\d+);/g,(m,d)=>String.fromCodePoint(parseInt(d,10)))\n    .replace(/&nbsp;/g,' ').replace(/&quot;/g,'\"').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&')\n    .replace(/[ \\t]+\\n/g,'\\n').replace(/\\n{3,}/g,'\\n\\n').trim();\n}\nfunction parseAll(html){\n  const posts=[]; const blocks=String(html).split('tgme_widget_message_wrap');\n  for(const b of blocks){\n    const dm=b.match(/data-post=\"([^\"]+)\"/); if(!dm) continue;\n    const parts=dm[1].split('/'); const ch=parts[0]; const id=parseInt(parts[1]||'',10);\n    if(!ch||!id) continue;\n    const tm=b.match(/datetime=\"([^\"]+)\"/); const date=tm?tm[1]:'';\n    const txm=b.match(/tgme_widget_message_text[^>]*>([\\s\\S]*?)<\\/div>/); const text=txm?decode(txm[1]):'';\n    posts.push({ id, channel: ch, date, text, link: 'https://t.me/'+ch+'/'+id });\n  }\n  return posts;\n}\nconst chMap={};\nfor(const c of $('Активные каналы').all()){ chMap[c.json.channel]=Number(c.json.last_id)||0; }\nconst out=[];\nfor(const it of $input.all()){\n  const html = it.json && it.json.data;\n  if(typeof html!=='string') continue;\n  for(const p of parseAll(html)){\n    const last = chMap[p.channel]!=null ? chMap[p.channel] : 0;\n    if(p.id>last) out.push({ json: p });\n  }\n}\nreturn out;"
+      },
+      "id": "parse",
+      "name": "Парсить посты",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const byCh={};\nfor(const it of $('Парсить посты').all()){\n  const p=it.json; if(!p||!p.channel) continue;\n  if(byCh[p.channel]==null || p.id>byCh[p.channel]) byCh[p.channel]=p.id;\n}\nreturn Object.keys(byCh).map(ch=>({ json:{ channel: ch, last_id: byCh[ch] } }));"
+      },
+      "id": "lastid",
+      "name": "Считать last_id",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1104,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "cachedResultName": "Jobs Monitor"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Channels",
+          "cachedResultName": "Channels"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "matchingColumns": [
+            "channel"
+          ],
+          "value": {},
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "updch",
+      "name": "Channels: обновить",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1328,
+        160
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "YOUR_GOOGLE_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const SYSTEM = `Ты обрабатываешь одно сообщение из Telegram-канала с вакансиями. Определи, вакансия это или нет (вакансия = конкретное предложение работы или проекта). Верни строго JSON, без пояснений и без markdown.\n\nПрофиль кандидата (Антон) и его 8 резюме под разные роли:\n1. AI Automation Engineer: n8n (self-hosted, production, MCP), Claude API, OpenAI, агентные workflow, REST, webhooks, OAuth, Python (FastAPI), JS, Docker, Linux, VPS.\n2. WordPress Developer: WordPress, кастомные плагины, ACF, темы, PHP, MySQL, REST API, Cloudflare, Core Web Vitals, WP Rocket, Yoast, Rank Math, Polylang.\n3. Technical SEO: multi-GEO SEO, hreflang, Schema.org, Core Web Vitals, Ahrefs, GSC, GA4, crawl и index, anti-detect, proxy, n8n rank tracking, iGaming.\n4. iGaming Creative Designer: баннеры и креативы (betting, casino, slots), Figma, Photoshop, Illustrator, AI-генерация (Midjourney, DALL-E, Leonardo).\n5. Video Editor and Motion Designer: Premiere, After Effects, DaVinci, CapCut, AI-видео (Sora, Runway, Pika), AI-озвучка (ElevenLabs), YouTube.\n6. Content Creator: рост YouTube-каналов, стратегия, retention, AdSense, спонсоры, SMM, AI-контент.\n7. Affiliate BD: iGaming трафик и аффилейт, multi-GEO, поиск и онбординг партнеров, рефералки, SEO, креативы, аналитика.\n8. Frontend: React, Next.js, TypeScript, Node.js, Tailwind, REST, WebSocket, Telegram-боты.\n\nЕсли не вакансия, верни {\"is_vacancy\": false}.\nЕсли вакансия, верни JSON с полями: is_vacancy (true), date, channel, title, company, salary_min, salary_max, salary_period, salary_currency, employment, remote, location, relocation, level, stack, nice_to_have, english, responsibilities, requirements, benefits, contact, link, match_score (0-100, насколько подходит Антону по любому из 8 профилей), match_explanation (1-2 предложения), priority (P0-P3), cv_to_use (название самого подходящего из 8 резюме), status (\"new\"), notes, raw_text (исходный текст поста), approach_hint (что Антону подчеркнуть в отклике, честно, на основе его реального профиля). Поля, которых нет в посте, оставляй пустыми. Пиши по-русски.`;\nreturn $input.all().map(it=>{\n  const p=it.json;\n  const text = (p.text && String(p.text).trim()) ? p.text : '(пустой пост, только медиа)';\n  return { json: {\n    row_id: p.channel + '_' + p.id,\n    channel: p.channel, post_id: p.id, date: p.date, link: p.link, raw_text: p.text || '',\n    body: { model: 'claude-sonnet-4-6', max_tokens: 8000, system: SYSTEM, messages: [{ role: 'user', content: 'Текст поста:\\n' + text }] }\n  }};\n});"
+      },
+      "id": "buildreq",
+      "name": "Собрать запрос Claude",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1104,
+        448
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Собрать запрос Claude').all();\nconst items = $input.all();\nconst out=[];\nfor(let i=0;i<items.length;i++){\n  const c = ctx[i] ? ctx[i].json : {};\n  const r = items[i].json;\n  let txt='';\n  try { txt = r && r.content && r.content[0] && r.content[0].text ? r.content[0].text : ''; } catch(e){}\n  if(!txt) continue;\n  let obj=null;\n  try {\n    const cleaned = String(txt).replace(/```json/gi,'').replace(/```/g,'').trim();\n    const s=cleaned.indexOf('{'); const e=cleaned.lastIndexOf('}');\n    obj = JSON.parse(s>=0 && e>=0 ? cleaned.slice(s,e+1) : cleaned);\n  } catch(e){ continue; }\n  if(!obj || obj.is_vacancy!==true) continue;\n  const g=(k)=>{ const v=obj[k]; if(v==null) return ''; if(Array.isArray(v)) return v.join('; '); if(typeof v==='object') return JSON.stringify(v); return v; };\n  out.push({ json: {\n    row_id: c.row_id || ((c.channel||'')+'_'+(c.post_id||'')),\n    is_vacancy: true,\n    date: c.date || g('date') || '',\n    channel: c.channel || g('channel') || '',\n    title: g('title'), company: g('company'),\n    salary_min: g('salary_min'), salary_max: g('salary_max'), salary_period: g('salary_period'), salary_currency: g('salary_currency'),\n    employment: g('employment'), remote: g('remote'), location: g('location'), relocation: g('relocation'),\n    level: g('level'), stack: g('stack'), nice_to_have: g('nice_to_have'), english: g('english'),\n    responsibilities: g('responsibilities'), requirements: g('requirements'), benefits: g('benefits'),\n    contact: g('contact'), link: c.link || g('link') || '',\n    match_score: g('match_score'), match_explanation: g('match_explanation'),\n    priority: g('priority'), cv_to_use: g('cv_to_use'),\n    status: g('status') || 'new', notes: g('notes'),\n    raw_text: c.raw_text || g('raw_text') || '',\n    approach_hint: g('approach_hint')\n  }});\n}\nreturn out;"
+      },
+      "id": "parseresp",
+      "name": "Разобрать ответ",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1552,
+        448
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "cachedResultName": "Jobs Monitor"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Jobs",
+          "cachedResultName": "Jobs"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "jobs",
+      "name": "Jobs: записать",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1760,
+        448
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "YOUR_GOOGLE_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\nconst vac = $('Разобрать ответ').all().map(i=>i.json)\n  .filter(v => Number(v.match_score) >= 40)\n  .sort((a,b)=> Number(b.match_score) - Number(a.match_score));\nreturn vac.map(v=>{\n  const sal = [v.salary_min, v.salary_max].filter(x=>x!=='' && x!=null).join(' - ');\n  const salStr = sal ? (sal + ' ' + (v.salary_currency||'')).trim() : 'не указана';\n  let remote; if (v.remote===true) remote='удалёнка'; else if (v.remote===false) remote = (v.location? esc(v.location) : 'офис'); else if (v.remote!=='' && v.remote!=null) remote=esc(v.remote); else remote='не указано';\n  const lines = [\n    '💼 <b>'+esc(v.title||'Вакансия')+'</b>'+(v.company?' — '+esc(v.company):''),\n    '💰 '+esc(salStr)+'  |  🏠 '+remote,\n    '🎯 match '+esc(v.match_score)+'  |  CV: '+esc(v.cv_to_use||'—'),\n    (v.approach_hint? '💡 '+esc(v.approach_hint):''),\n    '🔗 '+esc(v.link||'')\n  ].filter(Boolean);\n  return { json: { row_id: v.row_id, text: lines.join('\\n') } };\n});"
+      },
+      "id": "report",
+      "name": "Собрать отчет",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1984,
+        448
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "={{ $json.text }}",
+        "replyMarkup": "inlineKeyboard",
+        "inlineKeyboard": {
+          "rows": [
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "Податься",
+                    "additionalFields": {
+                      "callback_data": "=apply:{{ $json.row_id }}"
+                    }
+                  },
+                  {
+                    "text": "Спам",
+                    "additionalFields": {
+                      "callback_data": "=spam:{{ $json.row_id }}"
+                    }
+                  },
+                  {
+                    "text": "Позже",
+                    "additionalFields": {
+                      "callback_data": "=later:{{ $json.row_id }}"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "tg",
+      "name": "Telegram: отправить",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2208,
+        448
+      ],
+      "webhookId": "YOUR_WEBHOOK_ID",
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://t.me/s/{{ $json.channel }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (compatible; n8n-jobscout)"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 35000
+        }
+      },
+      "id": "fetch2",
+      "name": "Забрать t.me/s",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        672,
+        304
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {}
+      },
+      "id": "claude2",
+      "name": "Claude: классификация",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1328,
+        448
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "alwaysOutputData": true,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "YOUR_ANTHROPIC_CREDENTIAL_ID",
+          "name": "Anthropic API"
+        }
+      },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Каждые 4 часа": {
+      "main": [
+        [
+          {
+            "node": "Channels: читать",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Channels: читать": {
+      "main": [
+        [
+          {
+            "node": "Активные каналы",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Парсить посты": {
+      "main": [
+        [
+          {
+            "node": "Считать last_id",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Собрать запрос Claude",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Считать last_id": {
+      "main": [
+        [
+          {
+            "node": "Channels: обновить",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Разобрать ответ": {
+      "main": [
+        [
+          {
+            "node": "Jobs: записать",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Jobs: записать": {
+      "main": [
+        [
+          {
+            "node": "Собрать отчет",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Собрать отчет": {
+      "main": [
+        [
+          {
+            "node": "Telegram: отправить",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Активные каналы": {
+      "main": [
+        [
+          {
+            "node": "Забрать t.me/s",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Забрать t.me/s": {
+      "main": [
+        [
+          {
+            "node": "Парсить посты",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Собрать запрос Claude": {
+      "main": [
+        [
+          {
+            "node": "Claude: классификация",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude: классификация": {
+      "main": [
+        [
+          {
+            "node": "Разобрать ответ",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "versionId": "YOUR_VERSION_ID",
+  "meta": {
+    "instanceId": "YOUR_INSTANCE_ID"
+  },
+  "id": "YOUR_WORKFLOW_ID",
+  "tags": []
+}
