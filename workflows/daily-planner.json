@@ -1,0 +1,318 @@
+{
+  "name": "Утренний дайджест",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * *"
+            }
+          ]
+        }
+      },
+      "id": "schedule",
+      "name": "Каждое утро 8:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://api.github.com/repos/YOUR_GITHUB_USER/YOUR_VAULT_REPO/contents/00_System/MAP.md?ref=main",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/vnd.github+json"
+            },
+            {
+              "name": "User-Agent",
+              "value": "n8n-anton-digest"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ghmap",
+      "name": "GitHub: MAP",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        224,
+        304
+      ],
+      "retryOnFail": true,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "YOUR_GITHUB_CREDENTIAL_ID",
+          "name": "GitHub read"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://api.github.com/repos/YOUR_GITHUB_USER/YOUR_VAULT_REPO/contents/00_System/projects?ref=main",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/vnd.github+json"
+            },
+            {
+              "name": "User-Agent",
+              "value": "n8n-anton-digest"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ghlist",
+      "name": "GitHub: список карточек",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        448,
+        304
+      ],
+      "retryOnFail": true,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "YOUR_GITHUB_CREDENTIAL_ID",
+          "name": "GitHub read"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const incoming = $input.all();\nlet files;\nif (incoming.length === 1 && Array.isArray(incoming[0].json)) {\n  files = incoming[0].json;\n} else if (incoming.length === 1 && incoming[0].json && Array.isArray(incoming[0].json.body)) {\n  files = incoming[0].json.body;\n} else {\n  files = incoming.map(i => i.json);\n}\nreturn files\n  .filter(f => f && f.type === 'file' && typeof f.name === 'string' && f.name.endsWith('.md'))\n  .map(f => ({ json: { path: f.path, name: f.name } }));"
+      },
+      "id": "expand",
+      "name": "Развернуть список .md",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.github.com/repos/YOUR_GITHUB_USER/YOUR_VAULT_REPO/contents/{{ $json.path }}?ref=main",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/vnd.github+json"
+            },
+            {
+              "name": "User-Agent",
+              "value": "n8n-anton-digest"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ghcard",
+      "name": "GitHub: карточка",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        880,
+        304
+      ],
+      "retryOnFail": true,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "YOUR_GITHUB_CREDENTIAL_ID",
+          "name": "GitHub read"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const mapNode = $('GitHub: MAP').first().json;\nconst decode = (c) => Buffer.from(String(c || '').replace(/\\n/g, ''), 'base64').toString('utf8');\nconst mapText = mapNode.content ? decode(mapNode.content) : (mapNode.data || '');\n\nconst cards = $input.all().map(i => {\n  const j = i.json;\n  const text = j.content ? decode(j.content) : (j.data || '');\n  return `### ${j.name || j.path || 'card'}\\n${text}`;\n}).join('\\n\\n');\n\nconst today = $now.toFormat('dd.MM');\n\nconst combined = `Сегодня: ${today}\\n\\n# MAP.md\\n${mapText}\\n\\n# Карточки проектов\\n${cards}`;\n\nconst system = [\n  'Ты ассистент Антона. Сформируй утренний дайджест строго по структуре ниже, без отклонений.',\n  'Стиль: русский, без длинного тире (вместо него запятая), без буквы е с точками (обычная е), кратко, с цифрами, честно.',\n  'Форматирование для Telegram parse_mode HTML: жирность только тегами <b></b>. В обычном тексте не используй символы < > &.',\n  'Дата для заголовка передана в начале сообщения пользователя как Сегодня, подставь ее, не выдумывай день.',\n  '',\n  'Структура вывода (соблюдай эмодзи, теги и порядок):',\n  '☀️ <b>План на [дата ДД.ММ]</b>',\n  '🎯 <b>Фокус дня</b>',\n  'Одна строка, главное на сегодня.',\n  '<b>Приоритеты</b>',\n  'Для каждой задачи (3-5, по важности):',\n  'N. <b>Заголовок</b> (проект)',\n  '• что сделать',\n  '• критерий готовности или следующий шаг',\n  '⚠️ <b>Риски и блокеры</b>',\n  '• что заблокировано, просрочено или требует решения',\n  '🧊 <b>Не трогать / заморожено</b>',\n  '• пункты с явным правилом не начинать',\n  '',\n  'Если по разделу нет данных, пропусти весь раздел. Уложись в 3500 символов.'\n].join('\\n');\n\nreturn [{\n  json: {\n    body: {\n      model: 'claude-sonnet-4-6',\n      max_tokens: 2000,\n      system: system,\n      messages: [\n        { role: 'user', content: combined }\n      ]\n    }\n  }\n}];"
+      },
+      "id": "build",
+      "name": "Собрать промпт",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1104,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {}
+      },
+      "id": "claude",
+      "name": "Claude API: план дня",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1328,
+        304
+      ],
+      "retryOnFail": true,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "YOUR_ANTHROPIC_CREDENTIAL_ID",
+          "name": "Anthropic API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "={{ $json.content[0].text }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "tg",
+      "name": "Telegram: отправить",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1552,
+        304
+      ],
+      "webhookId": "YOUR_WEBHOOK_ID",
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "Telegram Bot"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Каждое утро 8:00": {
+      "main": [
+        [
+          {
+            "node": "GitHub: MAP",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GitHub: MAP": {
+      "main": [
+        [
+          {
+            "node": "GitHub: список карточек",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GitHub: список карточек": {
+      "main": [
+        [
+          {
+            "node": "Развернуть список .md",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Развернуть список .md": {
+      "main": [
+        [
+          {
+            "node": "GitHub: карточка",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GitHub: карточка": {
+      "main": [
+        [
+          {
+            "node": "Собрать промпт",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Собрать промпт": {
+      "main": [
+        [
+          {
+            "node": "Claude API: план дня",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude API: план дня": {
+      "main": [
+        [
+          {
+            "node": "Telegram: отправить",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false,
+    "timezone": "Europe/Tallinn"
+  },
+  "versionId": "YOUR_VERSION_ID",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "YOUR_INSTANCE_ID"
+  },
+  "id": "YOUR_WORKFLOW_ID",
+  "tags": []
+}
